@@ -1,6 +1,6 @@
 #!/bin/bash
-# meeting-summary.sh — transcribe + map-reduce summarize
-# Usage: ./meeting-summary.sh input.wav
+# audio_summarizer.sh — transcribe + map-reduce summarize
+# Usage: ./audio_summarizer.sh input.wav
 
 INPUT="$1"
 
@@ -39,6 +39,7 @@ SUMMARY_FILE="${JOB_DIR}/summary.txt"
 CHUNK_DIR="${JOB_DIR}/chunks"
 CHUNK_SUMMARIES="${JOB_DIR}/chunk_summaries.txt"
 WOUTPUT="${JOB_DIR}/transcript"  # whisper-cli -of base path
+SUMMARY_MODEL="${SUMMARY_MODEL:-audio-summarizer}"
 
 cd "$WHISPER_DIR" || { echo "error: cannot cd to $WHISPER_DIR"; exit 1; }
 
@@ -97,7 +98,7 @@ CHUNK_SIZE=6000
 if [ "$WORD_COUNT" -le "$CHUNK_SIZE" ]; then
   # ── Short meeting: single-pass summary ──
   echo "=== Short meeting — direct summarization ==="
-  ollama run meeting-summarizer "$(cat <<EOF
+  ollama run "$SUMMARY_MODEL" "$(cat <<EOF
 Summarize this meeting transcript. Include:
 1. Brief overview (2-3 sentences)
 2. Key decisions made
@@ -129,7 +130,7 @@ print(f'Split into {(len(words) + chunk_size - 1) // chunk_size} chunks')
   echo "--- Summarizing chunks ---"
   for chunk in "$CHUNK_DIR"/chunk_*.txt; do
     echo "  Processing $(basename "$chunk")..."
-    ollama run meeting-summarizer "$(cat <<EOF
+    ollama run "$SUMMARY_MODEL" "$(cat <<EOF
 Summarize this portion of a meeting transcript. Focus on:
 - Key decisions
 - Action items (with responsible party if mentioned)
@@ -145,7 +146,7 @@ EOF
 
   # REDUCE: Combine chunk summaries into final summary
   echo "--- Combining summaries ---"
-  ollama run meeting-summarizer "$(cat <<EOF
+  ollama run "$SUMMARY_MODEL" "$(cat <<EOF
 You are combining summaries from different portions of a long meeting.
 Create a unified meeting summary with:
 1. Brief overview (2-3 sentences)

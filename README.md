@@ -9,7 +9,7 @@ This project is aimed at long meetings (up to about 3 hours) on a machine like:
 The current script in [audio_summarizer.sh](audio_summarizer.sh) does this:
 1. Transcribes audio with whisper.cpp using model ggml-large-v3-turbo.
 2. Uses VAD with ggml-silero-v6.2.0.
-3. Summarizes with local Ollama model meeting-summarizer.
+3. Summarizes with local Ollama model audio-summarizer.
 4. Uses single-pass summarization for shorter transcripts.
 5. Uses map-reduce summarization for long transcripts.
 
@@ -101,9 +101,9 @@ If this command works, create the model from [Modelfile](Modelfile):
 
 ```bash
 cd "$HOME/src/local_audio_summarizer"
-ollama pull llama3.1:8b
-ollama create meeting-summarizer -f Modelfile
-ollama show meeting-summarizer
+ollama pull qwen3:8b
+ollama create audio-summarizer -f Modelfile
+ollama show audio-summarizer
 ```
 
 ## 5) Prepare input audio (recommended format)
@@ -132,6 +132,12 @@ You can also pass an absolute path:
 ./audio_summarizer.sh /full/path/to/meeting.wav
 ```
 
+The default Ollama model name is audio-summarizer. You can override it per run:
+
+```bash
+SUMMARY_MODEL=audio-summarizer ./audio_summarizer.sh meeting.wav
+```
+
 ## 7) Output location
 
 The script writes outputs under:
@@ -157,7 +163,7 @@ command -v ollama
 test -x "$HOME/src/whisper.cpp/build/bin/whisper-cli" && echo "whisper-cli ok"
 test -f "$HOME/src/whisper.cpp/models/ggml-large-v3-turbo.bin" && echo "asr model ok"
 test -f "$HOME/src/whisper.cpp/models/ggml-silero-v6.2.0.bin" && echo "vad model ok"
-ollama show meeting-summarizer >/dev/null && echo "ollama model ok"
+ollama show audio-summarizer >/dev/null && echo "ollama model ok"
 ```
 
 ## 9) Troubleshooting
@@ -170,12 +176,12 @@ ollama show meeting-summarizer >/dev/null && echo "ollama model ok"
 - Input file is invalid or unsupported.
 - Re-encode with ffmpeg to mono 16 kHz WAV and retry.
 
-### model "meeting-summarizer" not found
+### model "audio-summarizer" not found
 - Create the model with:
 
 ```bash
 cd "$HOME/src/local_audio_summarizer"
-ollama create meeting-summarizer -f Modelfile
+ollama create audio-summarizer -f Modelfile
 ```
 
 ### ollama list fails
