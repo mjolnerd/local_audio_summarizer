@@ -65,6 +65,11 @@ transcript_cache_key() {
   printf '%s' "$fingerprint" | shasum -a 256 | awk '{print $1}'
 }
 
+run_summary_prompt() {
+  local prompt="$1"
+  ollama run --nowordwrap "$SUMMARY_MODEL" "$prompt"
+}
+
 # ── Validate input ──
 if [ -z "$INPUT" ]; then
   echo "Usage: $0 <audio-file>"
@@ -184,7 +189,7 @@ CHUNK_SIZE=6000
 if [ "$WORD_COUNT" -le "$CHUNK_SIZE" ]; then
   # ── Short meeting: single-pass summary ──
   echo "=== Short meeting — direct summarization ==="
-  ollama run "$SUMMARY_MODEL" "$(cat <<EOF
+  run_summary_prompt "$(cat <<EOF
 Summarize this meeting transcript. Include:
 1. Brief overview (2-3 sentences)
 2. Key decisions made
@@ -216,7 +221,7 @@ print(f'Split into {(len(words) + chunk_size - 1) // chunk_size} chunks')
   echo "--- Summarizing chunks ---"
   for chunk in "$CHUNK_DIR"/chunk_*.txt; do
     echo "  Processing $(basename "$chunk")..."
-    ollama run "$SUMMARY_MODEL" "$(cat <<EOF
+    run_summary_prompt "$(cat <<EOF
 Summarize this portion of a meeting transcript. Focus on:
 - Key decisions
 - Action items (with responsible party if mentioned)
@@ -232,7 +237,7 @@ EOF
 
   # REDUCE: Combine chunk summaries into final summary
   echo "--- Combining summaries ---"
-  ollama run "$SUMMARY_MODEL" "$(cat <<EOF
+  run_summary_prompt "$(cat <<EOF
 You are combining summaries from different portions of a long meeting.
 Create a unified meeting summary with:
 1. Brief overview (2-3 sentences)
