@@ -9,9 +9,10 @@ This project is aimed at long meetings (up to about 3 hours) on a machine like:
 The current script in [audio_summarizer.sh](audio_summarizer.sh) does this:
 1. Transcribes audio with whisper.cpp using model ggml-large-v3-turbo.
 2. Uses VAD with ggml-silero-v6.2.0.
-3. Summarizes with local Ollama model audio-summarizer.
-4. Uses single-pass summarization for shorter transcripts.
-5. Uses map-reduce summarization for long transcripts.
+3. Transcodes source audio to mono 16 kHz WAV with a local cache to avoid re-transcoding unchanged files.
+4. Summarizes with local Ollama model audio-summarizer.
+5. Uses single-pass summarization for shorter transcripts.
+6. Uses map-reduce summarization for long transcripts.
 
 ## Default path used by the script
 
@@ -109,6 +110,15 @@ ollama show audio-summarizer
 ## 5) Prepare input audio (recommended format)
 
 Best results come from mono 16 kHz WAV.
+
+The script can take many common audio formats directly and will transcode automatically.
+That transcoding is cached by source path + file metadata to avoid re-transcoding the same unchanged source.
+
+Cache location:
+
+```text
+$HOME/.cache/local_audio_summarizer/transcoded/
+```
 
 Convert source audio:
 

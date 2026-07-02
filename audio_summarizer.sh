@@ -1,8 +1,47 @@
 #!/bin/bash
 # audio_summarizer.sh — transcribe + map-reduce summarize
-# Usage: ./audio_summarizer.sh input.wav
+# Usage: ./audio_summarizer.sh <audio-file>
 
 INPUT="$1"
+
+cache_key_for_file() {
+  local file_path="$1"
+  local fingerprint
+  fingerprint="${file_path}|$(stat -f '%m|%z' "$file_path")"
+  printf '%s' "$fingerprint" | shasum -a 256 | awk '{print $1}'
+}
+
+get_or_create_transcoded_audio() {
+  local src="$1"
+  local cache_dir="$HOME/.cache/local_audio_summarizer/transcoded"
+  local key
+  local output
+  local tmp_output
+
+  key="$(cache_key_for_file "$src")"
+  output="$cache_dir/${key}.wav"
+  tmp_output="$output.tmp.wav"
+
+  mkdir -p "$cache_dir"
+
+  if [ -f "$output" ]; then
+    echo "$output"
+    return 0
+  fi
+
+  command -v ffmpeg >/dev/null 2>&1 || {
+    echo "error: ffmpeg not found; install ffmpeg to enable transcoding" >&2
+    return 1
+  }
+
+  ffmpeg -hide_banner -loglevel error -y \
+    -i "$src" \
+    -ac 1 -ar 16000 -c:a pcm_s16le \
+    "$tmp_output" || return 1
+
+  mv "$tmp_output" "$output"
+  echo "$output"
+}
 
 # ── Validate input ──
 if [ -z "$INPUT" ]; then
@@ -17,6 +56,15 @@ if [ ! -f "$INPUT_ABS" ]; then
   echo "error: input file not found: $INPUT"
   exit 1
 fi
+
+echo "=== Preparing audio ==="
+INPUT_FOR_WHISPER="$(get_or_create_transcoded_audio "$INPUT_ABS")" || {
+  echo "error: failed to prepare input audio for transcription"
+  exit 1
+}
+echo "    Source:     $INPUT_ABS"
+echo "    Transcoded: $INPUT_FOR_WHISPER"
+echo ""
 
 # ── Set up paths ──
 # Sanitize basename for use in directory names (replace problematic chars)
@@ -51,7 +99,7 @@ fi
 
 # ── Step 1: Transcribe ──
 echo "=== Transcribing with whisper.cpp ==="
-echo "    Input:      $INPUT_ABS"
+echo "    Input:      $INPUT_FOR_WHISPER"
 echo "    Output dir: $JOB_DIR"
 echo ""
 
@@ -62,7 +110,7 @@ echo ""
   -bs 5 -et 2.8 -mc 64 -nth 0.6 \
   -l en -sow \
   -otxt -osrt \
-  -f "$INPUT_ABS" \
+  -f "$INPUT_FOR_WHISPER" \
   -of "$WOUTPUT"
 
 # Check if whisper-cli produced output
