@@ -43,6 +43,28 @@ get_or_create_transcoded_audio() {
   echo "$output"
 }
 
+transcript_cache_key() {
+  local prepared_audio="$1"
+  local whisper_model_rel="models/ggml-large-v3-turbo.bin"
+  local vad_model_rel="models/ggml-silero-v6.2.0.bin"
+  local whisper_args_sig="-bs 5 -et 2.8 -mc 64 -nth 0.6 -l en -sow --vad"
+  local audio_fingerprint
+  local whisper_model_fingerprint="missing"
+  local vad_model_fingerprint="missing"
+  local fingerprint
+
+  audio_fingerprint="$(stat -f '%m|%z' "$prepared_audio")"
+  if [ -f "$WHISPER_DIR/$whisper_model_rel" ]; then
+    whisper_model_fingerprint="$(stat -f '%m|%z' "$WHISPER_DIR/$whisper_model_rel")"
+  fi
+  if [ -f "$WHISPER_DIR/$vad_model_rel" ]; then
+    vad_model_fingerprint="$(stat -f '%m|%z' "$WHISPER_DIR/$vad_model_rel")"
+  fi
+
+  fingerprint="${prepared_audio}|${audio_fingerprint}|${whisper_model_rel}|${whisper_model_fingerprint}|${vad_model_rel}|${vad_model_fingerprint}|${whisper_args_sig}"
+  printf '%s' "$fingerprint" | shasum -a 256 | awk '{print $1}'
+}
+
 # ── Validate input ──
 if [ -z "$INPUT" ]; then
   echo "Usage: $0 <audio-file>"
@@ -88,6 +110,7 @@ CHUNK_DIR="${JOB_DIR}/chunks"
 CHUNK_SUMMARIES="${JOB_DIR}/chunk_summaries.txt"
 WOUTPUT="${JOB_DIR}/transcript"  # whisper-cli -of base path
 SUMMARY_MODEL="${SUMMARY_MODEL:-audio-summarizer}"
+TRANSCRIPT_CACHE_DIR="$HOME/.cache/local_audio_summarizer/transcripts"
 
 cd "$WHISPER_DIR" || { echo "error: cannot cd to $WHISPER_DIR"; exit 1; }
 
@@ -103,32 +126,47 @@ echo "    Input:      $INPUT_FOR_WHISPER"
 echo "    Output dir: $JOB_DIR"
 echo ""
 
-./build/bin/whisper-cli \
-  -m models/ggml-large-v3-turbo.bin \
-  -vm models/ggml-silero-v6.2.0.bin \
-  --vad \
-  -bs 5 -et 2.8 -mc 64 -nth 0.6 \
-  -l en -sow \
-  -otxt -osrt \
-  -f "$INPUT_FOR_WHISPER" \
-  -of "$WOUTPUT"
+mkdir -p "$TRANSCRIPT_CACHE_DIR"
+TRANSCRIPT_KEY="$(transcript_cache_key "$INPUT_FOR_WHISPER")"
+CACHED_TXT="$TRANSCRIPT_CACHE_DIR/${TRANSCRIPT_KEY}.txt"
+CACHED_SRT="$TRANSCRIPT_CACHE_DIR/${TRANSCRIPT_KEY}.srt"
 
-# Check if whisper-cli produced output
-if [ ! -f "${WOUTPUT}.txt" ] || [ ! -f "${WOUTPUT}.srt" ]; then
-  echo ""
-  echo "error: transcription failed — no output produced"
-  echo "       Check that the input file is a valid audio file."
-  exit 1
+if [ -f "$CACHED_TXT" ] && [ -f "$CACHED_SRT" ]; then
+  echo "    Cache:      hit ($TRANSCRIPT_KEY)"
+  cp "$CACHED_SRT" "$SRT_FILE"
+  tr '\n' ' ' < "$CACHED_TXT" | sed 's/  */ /g' > "$TRANSCRIPT"
+else
+  echo "    Cache:      miss ($TRANSCRIPT_KEY)"
+  ./build/bin/whisper-cli \
+    -m models/ggml-large-v3-turbo.bin \
+    -vm models/ggml-silero-v6.2.0.bin \
+    --vad \
+    -bs 5 -et 2.8 -mc 64 -nth 0.6 \
+    -l en -sow \
+    -otxt -osrt \
+    -f "$INPUT_FOR_WHISPER" \
+    -of "$WOUTPUT"
+
+  # Check if whisper-cli produced output
+  if [ ! -f "${WOUTPUT}.txt" ] || [ ! -f "${WOUTPUT}.srt" ]; then
+    echo ""
+    echo "error: transcription failed — no output produced"
+    echo "       Check that the input file is a valid audio file."
+    exit 1
+  fi
+
+  cp "${WOUTPUT}.txt" "$CACHED_TXT"
+  cp "${WOUTPUT}.srt" "$CACHED_SRT"
+
+  # Keep the SRT as-is for reference
+  cp "${WOUTPUT}.srt" "$SRT_FILE"
+
+  # Flatten the TXT output (segment-per-line) into continuous text for the LLM
+  tr '\n' ' ' < "${WOUTPUT}.txt" | sed 's/  */ /g' > "$TRANSCRIPT"
+
+  # Clean up the raw whisper output files (we have copies in our standard names)
+  rm -f "${WOUTPUT}.txt" "${WOUTPUT}.srt"
 fi
-
-# Keep the SRT as-is for reference
-cp "${WOUTPUT}.srt" "$SRT_FILE"
-
-# Flatten the TXT output (segment-per-line) into continuous text for the LLM
-tr '\n' ' ' < "${WOUTPUT}.txt" | sed 's/  */ /g' > "$TRANSCRIPT"
-
-# Clean up the raw whisper output files (we have copies in our standard names)
-rm -f "${WOUTPUT}.txt" "${WOUTPUT}.srt"
 
 WORD_COUNT=$(wc -w < "$TRANSCRIPT")
 echo ""

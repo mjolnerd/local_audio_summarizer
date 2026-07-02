@@ -10,9 +10,10 @@ The current script in [audio_summarizer.sh](audio_summarizer.sh) does this:
 1. Transcribes audio with whisper.cpp using model ggml-large-v3-turbo.
 2. Uses VAD with ggml-silero-v6.2.0.
 3. Transcodes source audio to mono 16 kHz WAV with a local cache to avoid re-transcoding unchanged files.
-4. Summarizes with local Ollama model audio-summarizer.
-5. Uses single-pass summarization for shorter transcripts.
-6. Uses map-reduce summarization for long transcripts.
+4. Transcribes with whisper.cpp and caches TXT/SRT outputs so failed summarization retries can skip re-transcription.
+5. Summarizes with local Ollama model audio-summarizer.
+6. Uses single-pass summarization for shorter transcripts.
+7. Uses map-reduce summarization for long transcripts.
 
 ## Default path used by the script
 
@@ -118,6 +119,12 @@ Cache location:
 
 ```text
 $HOME/.cache/local_audio_summarizer/transcoded/
+```
+
+Transcript cache location:
+
+```text
+$HOME/.cache/local_audio_summarizer/transcripts/
 ```
 
 Convert source audio:
