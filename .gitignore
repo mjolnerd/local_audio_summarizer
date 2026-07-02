@@ -1,0 +1,43 @@
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon?
+._*
+
+# Editor / IDE
+.vscode/*
+!.vscode/settings.json
+!.vscode/extensions.json
+!.vscode/tasks.json
+.history/
+*.swp
+*.swo
+
+# Shell / logs
+*.log
+*.tmp
+*.temp
+
+# Python cache (used by helper snippets)
+__pycache__/
+*.pyc
+
+# Local environment files
+.env
+.env.*
+
+# Generated local audio/transcript artifacts (if produced in repo)
+*.wav
+*.mp3
+*.m4a
+*.aac
+*.flac
+*.srt
+transcript*.txt
+summary*.txt
+chunk_*.txt
+
+# Runtime output directory for this project
+output/
+chunks/
