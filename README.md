@@ -1,8 +1,8 @@
 # local_audio_summarizer
 
-Local, on-device meeting transcription and summarization for macOS Apple Silicon.
+Local, on-device audio transcription and summarization for macOS Apple Silicon.
 
-This project is aimed at long meetings (up to about 3 hours) on a machine like:
+This project is aimed at long recordings (up to about 3 hours) on a machine like:
 - MacBook Air M2
 - 16 GiB RAM
 
@@ -10,7 +10,7 @@ The current script in [audio_summarizer.sh](audio_summarizer.sh) does this:
 1. Transcodes source audio to mono 16 kHz WAV with a local cache to avoid re-transcoding unchanged files.
 2. Uses VAD with ggml-silero-v6.2.0 to filter out silence and reduce the amount of audio to transcribe and summarize.
 3. Transcribes with whisper.cpp and caches TXT/SRT outputs so failed summarization retries can skip re-transcription.
-4. Summarizes with local Ollama model audio-summarizer.
+4. Summarizes with a local Ollama model selected by profile (meeting/workshop/tv/movie).
 5. Uses single-pass summarization for shorter transcripts.
 6. Uses map-reduce summarization for long transcripts.
 
@@ -90,7 +90,7 @@ ls -lh "$HOME/src/whisper.cpp/models/ggml-silero-v6.2.0.bin"
 
 If the VAD download produces a different filename in your whisper.cpp version, update the -vm argument in [audio_summarizer.sh](audio_summarizer.sh) to match.
 
-## 4) Start Ollama and create the summarizer model
+## 4) Start Ollama and create profile models
 
 Start the Ollama app once (Applications -> Ollama), then in terminal:
 
@@ -98,14 +98,19 @@ Start the Ollama app once (Applications -> Ollama), then in terminal:
 ollama list
 ```
 
-If this command works, create the model from [Modelfile](Modelfile):
+If this command works, create models from the profile Modelfiles:
 
 ```bash
 cd "$HOME/src/local_audio_summarizer"
 ollama pull qwen3:8b
-ollama create audio-summarizer -f Modelfile
-ollama show audio-summarizer
+ollama create audio-summarizer-meeting -f profiles/Modelfile.meeting
+ollama create audio-summarizer-workshop -f profiles/Modelfile.workshop
+ollama create audio-summarizer-tv -f profiles/Modelfile.tv
+ollama create audio-summarizer-movie -f profiles/Modelfile.movie
+ollama show audio-summarizer-meeting
 ```
+
+The root [Modelfile](Modelfile) remains a meeting-focused profile for backwards compatibility.
 
 ## 5) Prepare input audio (recommended format)
 
@@ -148,10 +153,20 @@ You can also pass an absolute path:
 ./audio_summarizer.sh /full/path/to/meeting.wav
 ```
 
-The default Ollama model name is audio-summarizer. You can override it per run:
+Default profile is meeting. You can switch profiles per run:
 
 ```bash
-SUMMARY_MODEL=audio-summarizer ./audio_summarizer.sh meeting.wav
+SUMMARY_PROFILE=workshop ./audio_summarizer.sh workshop.wav
+SUMMARY_PROFILE=tv ./audio_summarizer.sh episode.wav
+SUMMARY_PROFILE=movie ./audio_summarizer.sh movie.wav
+```
+
+Valid profile values are meeting, workshop, tv, movie.
+
+You can also override with an explicit model name:
+
+```bash
+SUMMARY_MODEL=audio-summarizer-meeting ./audio_summarizer.sh meeting.wav
 ```
 
 ## 7) Output location
@@ -170,7 +185,7 @@ Files produced:
 
 ## 8) Quick verification checklist
 
-Run these checks before first real meeting:
+Run these checks before first real recording:
 
 ```bash
 command -v ffmpeg
@@ -179,7 +194,10 @@ command -v ollama
 test -x "$HOME/src/whisper.cpp/build/bin/whisper-cli" && echo "whisper-cli ok"
 test -f "$HOME/src/whisper.cpp/models/ggml-large-v3-turbo.bin" && echo "asr model ok"
 test -f "$HOME/src/whisper.cpp/models/ggml-silero-v6.2.0.bin" && echo "vad model ok"
-ollama show audio-summarizer >/dev/null && echo "ollama model ok"
+ollama show audio-summarizer-meeting >/dev/null && echo "meeting model ok"
+ollama show audio-summarizer-workshop >/dev/null && echo "workshop model ok"
+ollama show audio-summarizer-tv >/dev/null && echo "tv model ok"
+ollama show audio-summarizer-movie >/dev/null && echo "movie model ok"
 ```
 
 ## 9) Troubleshooting
@@ -192,12 +210,12 @@ ollama show audio-summarizer >/dev/null && echo "ollama model ok"
 - Input file is invalid or unsupported.
 - Re-encode with ffmpeg to mono 16 kHz WAV and retry.
 
-### model "audio-summarizer" not found
-- Create the model with:
+### model "audio-summarizer-*" not found
+- Create the needed profile model with:
 
 ```bash
 cd "$HOME/src/local_audio_summarizer"
-ollama create audio-summarizer -f Modelfile
+ollama create audio-summarizer-meeting -f profiles/Modelfile.meeting
 ```
 
 ### ollama list fails
@@ -209,3 +227,7 @@ ollama create audio-summarizer -f Modelfile
 - [audio_summarizer.sh](audio_summarizer.sh)
 - [README.md](README.md)
 - [Modelfile](Modelfile)
+- [profiles/Modelfile.meeting](profiles/Modelfile.meeting)
+- [profiles/Modelfile.workshop](profiles/Modelfile.workshop)
+- [profiles/Modelfile.tv](profiles/Modelfile.tv)
+- [profiles/Modelfile.movie](profiles/Modelfile.movie)

@@ -114,7 +114,22 @@ SUMMARY_FILE="${JOB_DIR}/summary.txt"
 CHUNK_DIR="${JOB_DIR}/chunks"
 CHUNK_SUMMARIES="${JOB_DIR}/chunk_summaries.txt"
 WOUTPUT="${JOB_DIR}/transcript"  # whisper-cli -of base path
-SUMMARY_MODEL="${SUMMARY_MODEL:-audio-summarizer}"
+SUMMARY_PROFILE="${SUMMARY_PROFILE:-meeting}"
+if [ -z "${SUMMARY_MODEL:-}" ]; then
+  case "$SUMMARY_PROFILE" in
+    meeting) SUMMARY_MODEL="audio-summarizer-meeting" ;;
+    workshop) SUMMARY_MODEL="audio-summarizer-workshop" ;;
+    tv) SUMMARY_MODEL="audio-summarizer-tv" ;;
+    movie) SUMMARY_MODEL="audio-summarizer-movie" ;;
+    *)
+      echo "error: invalid SUMMARY_PROFILE '$SUMMARY_PROFILE'"
+      echo "       valid profiles: meeting, workshop, tv, movie"
+      exit 1
+      ;;
+  esac
+else
+  SUMMARY_MODEL="$SUMMARY_MODEL"
+fi
 TRANSCRIPT_CACHE_DIR="$HOME/.cache/local_audio_summarizer/transcripts"
 
 cd "$WHISPER_DIR" || { echo "error: cannot cd to $WHISPER_DIR"; exit 1; }
