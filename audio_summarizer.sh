@@ -70,6 +70,34 @@ run_summary_prompt() {
   ollama run --nowordwrap "$SUMMARY_MODEL" "$prompt"
 }
 
+ensure_summary_model_available() {
+  command -v ollama >/dev/null 2>&1 || {
+    echo "error: ollama not found; install ollama first"
+    return 1
+  }
+
+  if ollama show "$SUMMARY_MODEL" >/dev/null 2>&1; then
+    return 0
+  fi
+
+  echo "error: summary model not found in Ollama: $SUMMARY_MODEL"
+  echo "       Build it first with ollama create."
+
+  case "$SUMMARY_PROFILE" in
+    meeting|workshop|tv|movie)
+      local script_dir
+      local profile_file
+      script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+      profile_file="$script_dir/profiles/Modelfile.$SUMMARY_PROFILE"
+      if [ -f "$profile_file" ]; then
+        echo "       Example: ollama create $SUMMARY_MODEL -f $profile_file"
+      fi
+      ;;
+  esac
+
+  return 1
+}
+
 # ── Validate input ──
 if [ -z "$INPUT" ]; then
   echo "Usage: $0 <audio-file>"
@@ -132,6 +160,8 @@ else
 fi
 TRANSCRIPT_CACHE_DIR="$HOME/.cache/local_audio_summarizer/transcripts"
 
+ensure_summary_model_available || exit 1
+
 cd "$WHISPER_DIR" || { echo "error: cannot cd to $WHISPER_DIR"; exit 1; }
 
 if [ ! -x "./build/bin/whisper-cli" ]; then
@@ -178,14 +208,11 @@ else
   cp "${WOUTPUT}.txt" "$CACHED_TXT"
   cp "${WOUTPUT}.srt" "$CACHED_SRT"
 
-  # Keep the SRT as-is for reference
-  cp "${WOUTPUT}.srt" "$SRT_FILE"
-
   # Flatten the TXT output (segment-per-line) into continuous text for the LLM
   tr '\n' ' ' < "${WOUTPUT}.txt" | sed 's/  */ /g' > "$TRANSCRIPT"
 
   # Clean up the raw whisper output files (we have copies in our standard names)
-  rm -f "${WOUTPUT}.txt" "${WOUTPUT}.srt"
+  rm -f "${WOUTPUT}.txt"
 fi
 
 WORD_COUNT=$(wc -w < "$TRANSCRIPT")
@@ -204,7 +231,7 @@ CHUNK_SIZE=6000
 if [ "$WORD_COUNT" -le "$CHUNK_SIZE" ]; then
   # ── Short meeting: single-pass summary ──
   echo "=== Short meeting — direct summarization ==="
-  run_summary_prompt "$(cat <<EOF
+  SHORT_PROMPT="$(cat <<EOF
 Summarize this meeting transcript. Include:
 1. Brief overview (2-3 sentences)
 2. Key decisions made
@@ -214,7 +241,12 @@ Summarize this meeting transcript. Include:
 Transcript:
 $(cat "$TRANSCRIPT")
 EOF
-)" | tee "$SUMMARY_FILE"
+)"
+
+  run_summary_prompt "$SHORT_PROMPT" | tee "$SUMMARY_FILE" || {
+    echo "error: summarization failed for model '$SUMMARY_MODEL'"
+    exit 1
+  }
 else
   # ── Long meeting: map-reduce ──
   echo "=== Long meeting — map-reduce summarization ==="
@@ -234,9 +266,10 @@ print(f'Split into {(len(words) + chunk_size - 1) // chunk_size} chunks')
 
   # MAP: Summarize each chunk
   echo "--- Summarizing chunks ---"
+  : > "$CHUNK_SUMMARIES"
   for chunk in "$CHUNK_DIR"/chunk_*.txt; do
     echo "  Processing $(basename "$chunk")..."
-    run_summary_prompt "$(cat <<EOF
+    CHUNK_PROMPT="$(cat <<EOF
 Summarize this portion of a meeting transcript. Focus on:
 - Key decisions
 - Action items (with responsible party if mentioned)
@@ -246,13 +279,17 @@ Be concise.
 Transcript portion:
 $(cat "$chunk")
 EOF
-)" >> "$CHUNK_SUMMARIES"
+)"
+    run_summary_prompt "$CHUNK_PROMPT" >> "$CHUNK_SUMMARIES" || {
+      echo "error: summarization failed while processing $(basename "$chunk") with model '$SUMMARY_MODEL'"
+      exit 1
+    }
     echo "---" >> "$CHUNK_SUMMARIES"
   done
 
   # REDUCE: Combine chunk summaries into final summary
   echo "--- Combining summaries ---"
-  run_summary_prompt "$(cat <<EOF
+  REDUCE_PROMPT="$(cat <<EOF
 You are combining summaries from different portions of a long meeting.
 Create a unified meeting summary with:
 1. Brief overview (2-3 sentences)
@@ -263,7 +300,12 @@ Create a unified meeting summary with:
 Chunk summaries:
 $(cat "$CHUNK_SUMMARIES")
 EOF
-)" | tee "$SUMMARY_FILE"
+)"
+
+  run_summary_prompt "$REDUCE_PROMPT" | tee "$SUMMARY_FILE" || {
+    echo "error: final reduce summarization failed for model '$SUMMARY_MODEL'"
+    exit 1
+  }
 
   echo ""
   echo "Chunk summaries saved: $CHUNK_SUMMARIES"
