@@ -1,8 +1,60 @@
 #!/bin/bash
 # audio_summarizer.sh — transcribe + map-reduce summarize
-# Usage: ./audio_summarizer.sh <audio-file>
+# Usage: ./audio_summarizer.sh --profile <meeting|workshop|tv|movie> <audio-file> [context-file ...]
 
-INPUT="$1"
+print_usage() {
+  echo "Usage: $0 [--profile <meeting|workshop|tv|movie>] <audio-file> [context-file ...]"
+  echo ""
+  echo "Examples:"
+  echo "  $0 --profile workshop workshop.wav slides.pdf"
+  echo "  $0 -p tv episode.wav"
+}
+
+SUMMARY_PROFILE="meeting"
+INPUT=""
+
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    -p|--profile)
+      if [ -z "${2:-}" ]; then
+        echo "error: missing value for $1"
+        print_usage
+        exit 1
+      fi
+      SUMMARY_PROFILE="$2"
+      shift 2
+      ;;
+    --profile=*)
+      SUMMARY_PROFILE="${1#*=}"
+      shift
+      ;;
+    -h|--help)
+      print_usage
+      exit 0
+      ;;
+    --)
+      shift
+      break
+      ;;
+    -*)
+      echo "error: unknown option: $1"
+      print_usage
+      exit 1
+      ;;
+    *)
+      INPUT="$1"
+      shift
+      break
+      ;;
+  esac
+done
+
+if [ -z "$INPUT" ] && [ "$#" -gt 0 ]; then
+  INPUT="$1"
+  shift
+fi
+
+CONTEXT_FILES=("$@")
 
 cache_key_for_file() {
   local file_path="$1"
@@ -70,6 +122,51 @@ run_summary_prompt() {
   ollama run --nowordwrap "$SUMMARY_MODEL" "$prompt"
 }
 
+extract_context_text() {
+  local context_text_file="$1"
+  local audio_dir="$2"
+  shift
+  shift
+  local context_file
+  local resolved_context_file
+
+  : > "$context_text_file"
+
+  if [ "$#" -eq 0 ]; then
+    return 0
+  fi
+
+  for context_file in "$@"; do
+    if [ -f "$context_file" ]; then
+      resolved_context_file="$context_file"
+    elif [ -f "$audio_dir/$context_file" ]; then
+      resolved_context_file="$audio_dir/$context_file"
+    else
+      echo "error: context file not found: $context_file"
+      echo "       looked in: current directory and $audio_dir"
+      return 1
+    fi
+
+    case "$resolved_context_file" in
+      *.pdf|*.PDF)
+        command -v pdftotext >/dev/null 2>&1 || {
+          echo "error: pdftotext not found; install poppler to extract PDF context"
+          echo "       Example: brew install poppler"
+          return 1
+        }
+        echo "    Context:    PDF $resolved_context_file"
+        pdftotext -layout "$resolved_context_file" - | tr '\n' ' ' | sed 's/  */ /g' >> "$context_text_file"
+        echo "" >> "$context_text_file"
+        ;;
+      *)
+        echo "    Context:    text $resolved_context_file"
+        tr '\n' ' ' < "$resolved_context_file" | sed 's/  */ /g' >> "$context_text_file"
+        echo "" >> "$context_text_file"
+        ;;
+    esac
+  done
+}
+
 ensure_summary_model_available() {
   command -v ollama >/dev/null 2>&1 || {
     echo "error: ollama not found; install ollama first"
@@ -100,7 +197,7 @@ ensure_summary_model_available() {
 
 # ── Validate input ──
 if [ -z "$INPUT" ]; then
-  echo "Usage: $0 <audio-file>"
+  print_usage
   exit 1
 fi
 
@@ -142,7 +239,6 @@ SUMMARY_FILE="${JOB_DIR}/summary.txt"
 CHUNK_DIR="${JOB_DIR}/chunks"
 CHUNK_SUMMARIES="${JOB_DIR}/chunk_summaries.txt"
 WOUTPUT="${JOB_DIR}/transcript"  # whisper-cli -of base path
-SUMMARY_PROFILE="${SUMMARY_PROFILE:-meeting}"
 if [ -z "${SUMMARY_MODEL:-}" ]; then
   case "$SUMMARY_PROFILE" in
     meeting) SUMMARY_MODEL="audio-summarizer-meeting" ;;
@@ -159,6 +255,7 @@ else
   SUMMARY_MODEL="$SUMMARY_MODEL"
 fi
 TRANSCRIPT_CACHE_DIR="$HOME/.cache/local_audio_summarizer/transcripts"
+CONTEXT_TEXT_FILE="$JOB_DIR/context.txt"
 
 ensure_summary_model_available || exit 1
 
@@ -227,17 +324,126 @@ fi
 
 # ── Step 2: Determine strategy ──
 CHUNK_SIZE=6000
+extract_context_text "$CONTEXT_TEXT_FILE" "$(dirname "$INPUT_ABS")" "${CONTEXT_FILES[@]}" || exit 1
 
-if [ "$WORD_COUNT" -le "$CHUNK_SIZE" ]; then
-  # ── Short meeting: single-pass summary ──
-  echo "=== Short meeting — direct summarization ==="
-  SHORT_PROMPT="$(cat <<EOF
-Summarize this meeting transcript. Include:
+CONTEXT_BLOCK=""
+if [ -s "$CONTEXT_TEXT_FILE" ]; then
+  CONTEXT_BLOCK=$(cat <<EOF
+
+Relevant context from attached documents:
+$(cat "$CONTEXT_TEXT_FILE")
+
+EOF
+)
+fi
+
+SHORT_PROMPT_HEADER=""
+MAP_PROMPT_HEADER=""
+REDUCE_PROMPT_HEADER=""
+
+case "$SUMMARY_PROFILE" in
+  meeting)
+    SHORT_PROMPT_HEADER="Summarize this meeting transcript. Include:
 1. Brief overview (2-3 sentences)
 2. Key decisions made
 3. Action items (with responsible party if mentioned)
-4. Important discussion points
+4. Important discussion points"
 
+    MAP_PROMPT_HEADER="Summarize this portion of a meeting transcript. Focus on:
+- Key decisions
+- Action items (with responsible party if mentioned)
+- Important discussion points
+Be concise."
+
+    REDUCE_PROMPT_HEADER="You are combining summaries from different portions of a long meeting.
+Create a unified meeting summary with:
+1. Brief overview (2-3 sentences)
+2. Key decisions made (consolidated, no duplicates)
+3. Action items (with responsible party if mentioned)
+4. Important discussion points (organized by topic)"
+    ;;
+  workshop)
+    SHORT_PROMPT_HEADER="Summarize this workshop transcript. Include:
+1. Session synopsis (2-4 sentences)
+2. Core concepts taught
+3. Demonstrations and examples shown
+4. Exercises, assignments, or next practice steps
+5. Q&A highlights and unresolved questions"
+
+    MAP_PROMPT_HEADER="Summarize this portion of a workshop transcript. Focus on:
+- Concepts taught
+- Demonstrations/examples
+- Exercises/assignments/practice steps
+- Q&A highlights and unresolved questions
+Be concise and avoid repetition."
+
+    REDUCE_PROMPT_HEADER="You are combining summaries from different portions of a long workshop.
+Create a unified workshop summary with:
+1. Session synopsis (2-4 sentences)
+2. Core concepts taught (deduplicated)
+3. Demonstrations and examples shown
+4. Exercises, assignments, or next practice steps
+5. Q&A highlights and unresolved questions"
+    ;;
+  tv)
+    SHORT_PROMPT_HEADER="Summarize this TV episode transcript. Include:
+1. Episode overview (3-5 sentences)
+2. Major plot beats in chronological order
+3. Character developments and relationship changes
+4. Memorable scenes or lines (short quotes only if present)
+5. Cliffhangers, open questions, or setup for later episodes"
+
+    MAP_PROMPT_HEADER="Summarize this portion of a TV episode transcript. Focus on:
+- Plot beats in order
+- Character developments and relationship changes
+- Memorable scenes/lines if present
+- Open questions or setup for later episodes
+Be concise and factual."
+
+    REDUCE_PROMPT_HEADER="You are combining summaries from different portions of a TV episode.
+Create a unified episode summary with:
+1. Episode overview (3-5 sentences)
+2. Major plot beats in chronological order
+3. Character developments and relationship changes
+4. Memorable scenes or lines
+5. Cliffhangers, open questions, or setup for later episodes"
+    ;;
+  movie)
+    SHORT_PROMPT_HEADER="Summarize this movie transcript. Include:
+1. Film overview (3-5 sentences)
+2. Story arc by act (setup, confrontation, resolution)
+3. Main character goals, conflicts, and transformations
+4. Key themes and motifs with transcript evidence
+5. Ending impact and unresolved threads"
+
+    MAP_PROMPT_HEADER="Summarize this portion of a movie transcript. Focus on:
+- Story progression
+- Character goals, conflicts, and changes
+- Themes/motifs supported by transcript evidence
+- Notable setup or payoff elements
+Be concise and avoid speculation."
+
+    REDUCE_PROMPT_HEADER="You are combining summaries from different portions of a movie.
+Create a unified film summary with:
+1. Film overview (3-5 sentences)
+2. Story arc by act (setup, confrontation, resolution)
+3. Main character goals, conflicts, and transformations
+4. Key themes and motifs with transcript evidence
+5. Ending impact and unresolved threads"
+    ;;
+  *)
+    echo "error: unsupported SUMMARY_PROFILE for prompt templates: $SUMMARY_PROFILE"
+    exit 1
+    ;;
+esac
+
+if [ "$WORD_COUNT" -le "$CHUNK_SIZE" ]; then
+  # ── Short transcript: single-pass summary ──
+  echo "=== Short transcript — direct summarization ==="
+  SHORT_PROMPT="$(cat <<EOF
+${SHORT_PROMPT_HEADER}
+
+${CONTEXT_BLOCK}
 Transcript:
 $(cat "$TRANSCRIPT")
 EOF
@@ -248,8 +454,8 @@ EOF
     exit 1
   }
 else
-  # ── Long meeting: map-reduce ──
-  echo "=== Long meeting — map-reduce summarization ==="
+  # ── Long transcript: map-reduce ──
+  echo "=== Long transcript — map-reduce summarization ==="
 
   mkdir -p "$CHUNK_DIR"
 
@@ -270,12 +476,9 @@ print(f'Split into {(len(words) + chunk_size - 1) // chunk_size} chunks')
   for chunk in "$CHUNK_DIR"/chunk_*.txt; do
     echo "  Processing $(basename "$chunk")..."
     CHUNK_PROMPT="$(cat <<EOF
-Summarize this portion of a meeting transcript. Focus on:
-- Key decisions
-- Action items (with responsible party if mentioned)
-- Important discussion points
-Be concise.
+${MAP_PROMPT_HEADER}
 
+  ${CONTEXT_BLOCK}
 Transcript portion:
 $(cat "$chunk")
 EOF
@@ -290,13 +493,9 @@ EOF
   # REDUCE: Combine chunk summaries into final summary
   echo "--- Combining summaries ---"
   REDUCE_PROMPT="$(cat <<EOF
-You are combining summaries from different portions of a long meeting.
-Create a unified meeting summary with:
-1. Brief overview (2-3 sentences)
-2. Key decisions made (consolidated, no duplicates)
-3. Action items (with responsible party if mentioned)
-4. Important discussion points (organized by topic)
+${REDUCE_PROMPT_HEADER}
 
+${CONTEXT_BLOCK}
 Chunk summaries:
 $(cat "$CHUNK_SUMMARIES")
 EOF

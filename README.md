@@ -11,8 +11,9 @@ The current script in [audio_summarizer.sh](audio_summarizer.sh) does this:
 2. Uses VAD with ggml-silero-v6.2.0 to filter out silence and reduce the amount of audio to transcribe and summarize.
 3. Transcribes with whisper.cpp and caches TXT/SRT outputs so failed summarization retries can skip re-transcription.
 4. Summarizes with a local Ollama model selected by profile (meeting/workshop/tv/movie).
-5. Uses single-pass summarization for shorter transcripts.
-6. Uses map-reduce summarization for long transcripts.
+5. Optionally includes PDF or text context files, such as slide decks or workshop handouts.
+6. Uses single-pass summarization for shorter transcripts.
+7. Uses map-reduce summarization for long transcripts.
 
 ## Default path used by the script
 
@@ -48,9 +49,11 @@ After installation, follow Homebrew output instructions to add brew to your shel
 
 ```bash
 brew update
-brew install git cmake ffmpeg python pkg-config
+brew install git cmake ffmpeg python pkg-config poppler
 brew install --cask ollama
 ```
+
+`poppler` provides `pdftotext`, which the script uses to extract text from attached PDF context files.
 
 ## 2) Clone and build whisper.cpp
 
@@ -137,6 +140,12 @@ Convert source audio:
 ffmpeg -i input.m4a -ac 1 -ar 16000 -c:a pcm_s16le meeting.wav
 ```
 
+If you want to include supporting context, pass PDFs or text files after the audio file:
+
+```bash
+./audio_summarizer.sh meeting.wav slides.pdf agenda.txt
+```
+
 ## 6) Run the summarizer
 
 From repo root:
@@ -153,12 +162,18 @@ You can also pass an absolute path:
 ./audio_summarizer.sh /full/path/to/meeting.wav
 ```
 
-Default profile is meeting. You can switch profiles per run:
+Any additional arguments after the audio file are treated as context files and will be folded into the summary prompts. PDF files are extracted with `pdftotext`.
+
+Context file path resolution:
+- First, the path is checked as provided (absolute or relative to current directory).
+- If not found, it is checked relative to the input audio file's directory.
+
+Default profile is meeting. You can switch profiles per run with a command-line parameter:
 
 ```bash
-SUMMARY_PROFILE=workshop ./audio_summarizer.sh workshop.wav
-SUMMARY_PROFILE=tv ./audio_summarizer.sh episode.wav
-SUMMARY_PROFILE=movie ./audio_summarizer.sh movie.wav
+./audio_summarizer.sh --profile workshop workshop.wav
+./audio_summarizer.sh --profile tv episode.wav
+./audio_summarizer.sh --profile movie movie.wav
 ```
 
 Valid profile values are meeting, workshop, tv, movie.
@@ -209,6 +224,13 @@ ollama show audio-summarizer-movie >/dev/null && echo "movie model ok"
 ### error: transcription failed — no output produced
 - Input file is invalid or unsupported.
 - Re-encode with ffmpeg to mono 16 kHz WAV and retry.
+
+### error: pdftotext not found; install poppler to extract PDF context
+- Install Poppler with:
+
+```bash
+brew install poppler
+```
 
 ### model "audio-summarizer-*" not found
 - Create the needed profile model with:
