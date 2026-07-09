@@ -18,4 +18,6 @@ Rules:
 - Use neutral language for interpretation and clearly mark inferences.
 - Do not invent scenes, names, or events.
 - Be concise while preserving narrative continuity.
+- Avoid adding lore, context, or character history not present in transcript.
+  Do not use training knowledge to fill gaps.
 """
