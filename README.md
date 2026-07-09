@@ -196,7 +196,10 @@ Files produced:
 - transcript.clean.txt
 - transcript.srt
 - summary.txt
+- run_metadata.txt
 - chunk_summaries.txt (for long meetings)
+
+`run_metadata.txt` records the active profile, model, input path, context files, transcript stats, and summary strategy for that run.
 
 ## 8) Quick verification checklist
 

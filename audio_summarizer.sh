@@ -236,6 +236,7 @@ mkdir -p "$JOB_DIR"
 TRANSCRIPT="${JOB_DIR}/transcript.clean.txt"
 SRT_FILE="${JOB_DIR}/transcript.srt"
 SUMMARY_FILE="${JOB_DIR}/summary.txt"
+METADATA_FILE="${JOB_DIR}/run_metadata.txt"
 CHUNK_DIR="${JOB_DIR}/chunks"
 CHUNK_SUMMARIES="${JOB_DIR}/chunk_summaries.txt"
 WOUTPUT="${JOB_DIR}/transcript"  # whisper-cli -of base path
@@ -256,6 +257,23 @@ else
 fi
 TRANSCRIPT_CACHE_DIR="$HOME/.cache/local_audio_summarizer/transcripts"
 CONTEXT_TEXT_FILE="$JOB_DIR/context.txt"
+
+{
+  echo "Run timestamp: $TIMESTAMP"
+  echo "Profile: $SUMMARY_PROFILE"
+  echo "Summary model: $SUMMARY_MODEL"
+  echo "Input audio: $INPUT_ABS"
+  echo "Prepared audio: $INPUT_FOR_WHISPER"
+  echo "Output directory: $JOB_DIR"
+  echo "Context files:"
+  if [ "${#CONTEXT_FILES[@]}" -eq 0 ]; then
+    echo "  none"
+  else
+    for context_file in "${CONTEXT_FILES[@]}"; do
+      echo "  - $context_file"
+    done
+  fi
+} > "$METADATA_FILE"
 
 ensure_summary_model_available || exit 1
 
@@ -280,10 +298,12 @@ CACHED_SRT="$TRANSCRIPT_CACHE_DIR/${TRANSCRIPT_KEY}.srt"
 
 if [ -f "$CACHED_TXT" ] && [ -f "$CACHED_SRT" ]; then
   echo "    Cache:      hit ($TRANSCRIPT_KEY)"
+  TRANSCRIPT_CACHE_STATUS="hit"
   cp "$CACHED_SRT" "$SRT_FILE"
   tr '\n' ' ' < "$CACHED_TXT" | sed 's/  */ /g' > "$TRANSCRIPT"
 else
   echo "    Cache:      miss ($TRANSCRIPT_KEY)"
+  TRANSCRIPT_CACHE_STATUS="miss"
   ./build/bin/whisper-cli \
     -m models/ggml-large-v3-turbo.bin \
     -vm models/ggml-silero-v6.2.0.bin \
@@ -315,6 +335,11 @@ fi
 WORD_COUNT=$(wc -w < "$TRANSCRIPT")
 echo ""
 echo "Transcript: $WORD_COUNT words"
+
+{
+  echo "Transcript cache: $TRANSCRIPT_CACHE_STATUS"
+  echo "Transcript words: $WORD_COUNT"
+} >> "$METADATA_FILE"
 
 # Verify we actually got meaningful transcription
 if [ "$WORD_COUNT" -eq 0 ]; then
@@ -457,6 +482,8 @@ else
   # ── Long transcript: map-reduce ──
   echo "=== Long transcript — map-reduce summarization ==="
 
+  CHUNK_COUNT=0
+
   mkdir -p "$CHUNK_DIR"
 
   python3 -c "
@@ -474,7 +501,8 @@ print(f'Split into {(len(words) + chunk_size - 1) // chunk_size} chunks')
   echo "--- Summarizing chunks ---"
   : > "$CHUNK_SUMMARIES"
   for chunk in "$CHUNK_DIR"/chunk_*.txt; do
-    echo "  Processing $(basename "$chunk")..."
+    chunk_name=$(basename "$chunk" .txt)
+    echo "  Processing $chunk_name..."
     CHUNK_PROMPT="$(cat <<EOF
 ${MAP_PROMPT_HEADER}
 
@@ -483,17 +511,32 @@ Transcript portion:
 $(cat "$chunk")
 EOF
 )"
+    printf '=== %s Summary ===\n' "$chunk_name" >> "$CHUNK_SUMMARIES"
     run_summary_prompt "$CHUNK_PROMPT" >> "$CHUNK_SUMMARIES" || {
-      echo "error: summarization failed while processing $(basename "$chunk") with model '$SUMMARY_MODEL'"
+      echo "error: summarization failed while processing $chunk_name with model '$SUMMARY_MODEL'"
       exit 1
     }
     echo "---" >> "$CHUNK_SUMMARIES"
   done
 
+  CHUNK_COUNT=$(find "$CHUNK_DIR" -maxdepth 1 -name 'chunk_*.txt' | wc -l | tr -d ' ')
+
+  {
+    echo "Summary strategy: long / map-reduce"
+    echo "Chunk count: $CHUNK_COUNT"
+    echo "Chunk summaries file: $CHUNK_SUMMARIES"
+  } >> "$METADATA_FILE"
+
   # REDUCE: Combine chunk summaries into final summary
   echo "--- Combining summaries ---"
   REDUCE_PROMPT="$(cat <<EOF
 ${REDUCE_PROMPT_HEADER}
+
+Important synthesis rules:
+- The chunk summaries are chronological; use the full sequence from start to finish.
+- Do not summarize only the last chunk.
+- Build the final answer from repeated themes and decisions across multiple chunks.
+- If later chunks revisit earlier topics, merge them rather than replacing earlier context.
 
 ${CONTEXT_BLOCK}
 Chunk summaries:
@@ -510,9 +553,23 @@ EOF
   echo "Chunk summaries saved: $CHUNK_SUMMARIES"
 fi
 
+if [ "$WORD_COUNT" -le "$CHUNK_SIZE" ]; then
+  {
+    echo "Summary strategy: short / single-pass"
+    echo "Chunk count: 0"
+  } >> "$METADATA_FILE"
+fi
+
+{
+  echo "Summary file: $SUMMARY_FILE"
+  echo "SRT file: $SRT_FILE"
+  echo "Transcript file: $TRANSCRIPT"
+} >> "$METADATA_FILE"
+
 echo ""
 echo "=== Output files ==="
 echo "  Transcript:  $TRANSCRIPT"
 echo "  SRT:         $SRT_FILE"
 echo "  Summary:     $SUMMARY_FILE"
+echo "  Metadata:    $METADATA_FILE"
 
