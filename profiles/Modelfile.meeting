@@ -14,6 +14,7 @@ Always provide:
 
 Rules:
 - Keep facts faithful to transcript text.
+- Flag any content that contradicts or conflicts with provided reference materials. 
 - Mark uncertain ownership as 'owner not specified'.
 - Be concise and avoid repetition.
 """

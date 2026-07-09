@@ -15,6 +15,7 @@ Always provide:
 
 Rules:
 - Keep facts faithful to transcript text.
+- Flag any content that contradicts or conflicts with provided reference materials.
 - If no explicit assignment exists, write 'none stated'.
 - Separate instructor guidance from participant discussion.
 - Be concise and remove repetition.
